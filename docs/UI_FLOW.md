@@ -2,7 +2,7 @@
 
 ## Full UI Design
 
-![UI Flow](images/meeting-assistant-ui-flow.jpg)
+![UI Flow](image/meeting-assistant-ui-flow.jpg)
 
 ## Overview
 
