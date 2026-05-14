@@ -1,5 +1,9 @@
 # UI Flow
 
+## Full UI Design
+
+![UI Flow](images/meeting-assistant-ui-flow.jpg)
+
 ## Overview
 
 AI Meeting Assistant is a mobile-first AI meeting application that helps users record, upload, transcribe, summarize, and manage meeting content automatically.
