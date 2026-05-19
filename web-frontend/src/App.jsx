@@ -3,69 +3,61 @@ import { useEffect, useMemo, useRef, useState } from "react"
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000"
 
-
 function App() {
   const [screen, setScreen] = useState("home")
-  const [meetingTitle, setMeetingTitle] = useState("")
   const [meetings, setMeetings] = useState([])
+  const [meetingTitle, setMeetingTitle] = useState("")
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [recordingStatus, setRecordingStatus] = useState("idle")
+  const [processingStep, setProcessingStep] = useState("idle")
   const [audioUrl, setAudioUrl] = useState("")
-  const [audioBlob, setAudioBlob] = useState(null)
-  const [recordingError, setRecordingError] = useState("")
-  const [showPermissionModal, setShowPermissionModal] = useState(false)
-  const [lastRecordedMeeting, setLastRecordedMeeting] = useState(null)
   const [transcript, setTranscript] = useState("")
+  const [timelineTranscript, setTimelineTranscript] = useState("")
   const [summary, setSummary] = useState("")
   const [actionItems, setActionItems] = useState([])
   const [decisions, setDecisions] = useState([])
-  const [processingStatus, setProcessingStatus] = useState("idle")
   const [apiError, setApiError] = useState("")
+  const [showPermissionModal, setShowPermissionModal] = useState(false)
+  const [currentMeeting, setCurrentMeeting] = useState(null)
+
   const mediaRecorderRef = useRef(null)
   const audioChunksRef = useRef([])
   const timerRef = useRef(null)
   const recordingSecondsRef = useRef(0)
-  const isMobile = window.innerWidth < 768
 
-  const pageTitle = useMemo(() => {
-    if (screen === "home") return "Dashboard"
-    if (screen === "setup") return "New Meeting"
-    if (screen === "recording") return "Recording"
-    if (screen === "processing") return "AI Processing"
-    if (screen === "summary") return "Meeting Summary"
-    return "Dashboard"
+  const tab = useMemo(() => {
+    if (screen === "history") return "history"
+    if (screen === "settings") return "settings"
+    return "home"
   }, [screen])
 
-  function startMeeting() {
+  function openNewRecording() {
     setShowPermissionModal(true)
   }
 
-  async function requestMicrophoneAndStartRecording() {
+  async function startRecording() {
     try {
       setShowPermissionModal(false)
-      setRecordingError("")
       setApiError("")
       setTranscript("")
+      setTimelineTranscript("")
       setSummary("")
       setActionItems([])
       setDecisions([])
       setAudioUrl("")
-      setAudioBlob(null)
       setRecordingSeconds(0)
       recordingSecondsRef.current = 0
       audioChunksRef.current = []
 
       if (!navigator.mediaDevices?.getUserMedia) {
-        setRecordingError("目前瀏覽器或連線環境不支援麥克風錄音。若使用手機測試，請改用 HTTPS 或 localhost 環境。")
-        setScreen("setup")
+        setApiError("This browser does not support microphone recording.")
         return
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mimeType =
-        MediaRecorder.isTypeSupported("audio/mp4")
-          ? "audio/mp4"
-          : MediaRecorder.isTypeSupported("audio/webm")
+      const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
+        ? "audio/mp4"
+        : MediaRecorder.isTypeSupported("audio/webm")
           ? "audio/webm"
           : ""
 
@@ -83,20 +75,27 @@ function App() {
       }
 
       mediaRecorder.onstop = async () => {
-        const recordedBlob = new Blob(audioChunksRef.current, { type: mimeType || "audio/mp4" })
+        const recordedBlob = new Blob(audioChunksRef.current, {
+          type: mimeType || "audio/mp4",
+        })
         const url = URL.createObjectURL(recordedBlob)
         const meeting = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`,
           title: meetingTitle.trim() || "Untitled Meeting",
           date: new Date().toLocaleDateString("zh-TW"),
+          time: new Date().toLocaleTimeString("zh-TW", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
           durationSeconds: recordingSecondsRef.current,
+          audioUrl: url,
+          status: "Processing",
         }
 
-        setAudioBlob(recordedBlob)
+        setCurrentMeeting(meeting)
         setAudioUrl(url)
-        setLastRecordedMeeting(meeting)
         stream.getTracks().forEach((track) => track.stop())
-
-        await uploadRecordingForAi(recordedBlob, meeting, mimeType)
+        await uploadRecording(recordedBlob, meeting, mimeType)
       }
 
       mediaRecorder.start()
@@ -112,8 +111,7 @@ function App() {
       }, 1000)
     } catch (error) {
       console.error(error)
-      setRecordingError("麥克風授權失敗，請確認瀏覽器已允許此網站使用麥克風。")
-      setScreen("setup")
+      setApiError("Microphone permission failed. Please allow microphone access and try again.")
     }
   }
 
@@ -128,20 +126,20 @@ function App() {
     }
 
     setRecordingStatus("processing")
-    setProcessingStatus("uploading")
+    setProcessingStep("uploading")
     setScreen("processing")
   }
 
-  async function uploadRecordingForAi(recordedBlob, meeting, mimeType) {
+  async function uploadRecording(recordedBlob, meeting, mimeType) {
     try {
-      setProcessingStatus("uploading")
-
-      const fileExtension = getAudioFileExtension(mimeType)
       const formData = new FormData()
-      formData.append("file", recordedBlob, `meeting-${Date.now()}.${fileExtension}`)
+      const extension = getAudioFileExtension(mimeType)
+      formData.append("file", recordedBlob, `meeting-${Date.now()}.${extension}`)
       formData.append("title", meeting.title)
 
-      setProcessingStatus("transcribing")
+      setProcessingStep("uploading")
+      await wait(250)
+      setProcessingStep("transcribing")
 
       const response = await fetch(`${API_BASE_URL}/meetings/transcribe-summary`, {
         method: "POST",
@@ -150,35 +148,65 @@ function App() {
 
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(errorText || "Failed to generate transcript and summary.")
+        throw new Error(errorText || "Failed to process recording.")
       }
 
-      setProcessingStatus("summarizing")
-
+      setProcessingStep("summarizing")
       const result = await response.json()
-      const parsedResult = normalizeMeetingResult(result)
+      console.log("AI result from backend:", result)
+      const parsed = normalizeMeetingResult(result)
 
-      setTranscript(parsedResult.transcript)
-      setSummary(parsedResult.summary)
-      setActionItems(parsedResult.actionItems)
-      setDecisions(parsedResult.decisions)
-      setLastRecordedMeeting({
+      const completedMeeting = {
         ...meeting,
-        id: result.meeting_id || Date.now(),
-        transcript: parsedResult.transcript,
-        summary: parsedResult.summary,
-        actionItems: parsedResult.actionItems,
-        decisions: parsedResult.decisions,
-        status: "AI Generated",
-      })
-      setProcessingStatus("completed")
+        id: result.meeting_id || meeting.id,
+        title: result.meeting_title || meeting.title,
+        transcript: parsed.transcript,
+        timelineTranscript: parsed.timelineTranscript,
+        summary: parsed.summary,
+        actionItems: parsed.actionItems,
+        decisions: parsed.decisions,
+        status: "Completed",
+      }
+
+      setTranscript(parsed.transcript)
+      setTimelineTranscript(parsed.timelineTranscript)
+      setSummary(parsed.summary)
+      setActionItems(parsed.actionItems)
+      setDecisions(parsed.decisions)
+      setCurrentMeeting(completedMeeting)
+      setMeetings((current) => [completedMeeting, ...current])
+      setProcessingStep("completed")
       setScreen("summary")
     } catch (error) {
       console.error(error)
-      setApiError("AI processing failed. The recording was saved locally, but transcript and summary were not generated.")
-      setProcessingStatus("failed")
+      const failedMeeting = {
+        ...meeting,
+        status: "Recorded",
+      }
+      setCurrentMeeting(failedMeeting)
+      setMeetings((current) => [failedMeeting, ...current])
+      setApiError("AI processing failed. The recording was saved, but transcript and summary were not generated.")
+      setProcessingStep("failed")
       setScreen("summary")
     }
+  }
+
+  function openMeeting(meeting) {
+    setCurrentMeeting(meeting)
+    setMeetingTitle(meeting.title || "")
+    setAudioUrl(meeting.audioUrl || "")
+    setRecordingSeconds(meeting.durationSeconds || 0)
+    setTranscript(meeting.transcript || "")
+    setTimelineTranscript(meeting.timelineTranscript || "")
+    setSummary(meeting.summary || "")
+    setActionItems(meeting.actionItems || [])
+    setDecisions(meeting.decisions || [])
+    setApiError("")
+    setScreen("summary")
+  }
+
+  function saveAndGoHistory() {
+    setScreen("saved")
   }
 
   useEffect(() => {
@@ -186,152 +214,250 @@ function App() {
       if (timerRef.current) {
         window.clearInterval(timerRef.current)
       }
-
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl)
-      }
     }
-  }, [audioUrl])
+  }, [])
 
   return (
     <div style={styles.appShell}>
-      <aside style={isMobile ? styles.sidebarMobileHidden : styles.sidebar}>
-        <div style={styles.logoBlock}>
-          <div style={styles.logoIcon}>AI</div>
-          <div>
-            <h2 style={styles.logoTitle}>AI Meeting</h2>
-            <p style={styles.logoSubtitle}>Assistant</p>
-          </div>
-        </div>
-
-        <nav style={styles.navList}>
-          <NavItem active={screen === "home"} icon="🏠" label="Dashboard" onClick={() => setScreen("home")} />
-          <NavItem active={screen === "setup"} icon="🎙️" label="New Meeting" onClick={() => setScreen("setup")} />
-          <NavItem active={false} icon="📄" label="Transcripts" />
-          <NavItem active={false} icon="⚙️" label="Settings" />
-        </nav>
-
-        <div style={styles.sidebarCard}>
-          <p style={styles.sidebarCardTitle}>MVP Progress</p>
-          <div style={styles.progressTrack}>
-            <div style={styles.progressBar} />
-          </div>
-          <p style={styles.sidebarCardText}>UI Flow · Recording · Summary</p>
-        </div>
-      </aside>
-
-      <main style={isMobile ? styles.mainMobile : styles.main}>
-        <header style={isMobile ? styles.topbarMobile : styles.topbar}>
-          <div>
-            <p style={styles.eyebrow}>Web Version</p>
-            <h1 style={isMobile ? styles.pageTitleMobile : styles.pageTitle}>{pageTitle}</h1>
-          </div>
-
-          <button style={styles.primaryButton} onClick={() => setScreen("setup")}>
-            + New Meeting
-          </button>
-        </header>
-
+      <PhoneFrame>
         {screen === "home" && (
-          <HomeScreen
-            meetings={meetings}
-            onNewMeeting={() => setScreen("setup")}
-            onOpenMeeting={(meeting) => {
-              setMeetingTitle(meeting.title)
-              setLastRecordedMeeting(meeting)
-              setAudioUrl(meeting.audioUrl || "")
-              setTranscript(meeting.transcript || "")
-              setSummary(meeting.summary || "")
-              setActionItems(meeting.actionItems || [])
-              setDecisions(meeting.decisions || [])
-              setApiError("")
-              setRecordingSeconds(meeting.durationSeconds || 0)
-              setScreen("summary")
-            }}
-          />
-        )}
-
-        {screen === "setup" && (
-          <SetupScreen
-            meetingTitle={meetingTitle}
-            setMeetingTitle={setMeetingTitle}
-            recordingError={recordingError}
-            onCancel={() => setScreen("home")}
-            onStart={startMeeting}
-          />
+          <HomeScreen onStart={openNewRecording} apiError={apiError} />
         )}
 
         {screen === "recording" && (
           <RecordingScreen
-            meetingTitle={meetingTitle}
             recordingSeconds={recordingSeconds}
             recordingStatus={recordingStatus}
             onStop={stopRecording}
           />
         )}
 
-        {screen === "processing" && <ProcessingScreen processingStatus={processingStatus} />}
+        {screen === "processing" && (
+          <ProcessingScreen processingStep={processingStep} />
+        )}
 
         {screen === "summary" && (
           <SummaryScreen
-            meeting={lastRecordedMeeting}
-            recordingSeconds={recordingSeconds}
+            meeting={currentMeeting}
             audioUrl={audioUrl}
             transcript={transcript}
+            timelineTranscript={timelineTranscript}
             summary={summary}
             actionItems={actionItems}
             decisions={decisions}
             apiError={apiError}
-            onBackHome={() => {
-              if (lastRecordedMeeting) {
-                setMeetings((currentMeetings) => {
-                  const alreadySaved = currentMeetings.some((meeting) => meeting.id === lastRecordedMeeting.id)
-                  if (alreadySaved) return currentMeetings
-
-                  return [
-                    {
-                      ...lastRecordedMeeting,
-                      id: lastRecordedMeeting.id || Date.now(),
-                      audioUrl,
-                      transcript,
-                      summary,
-                      actionItems,
-                      decisions,
-                      status: summary || transcript ? "AI Generated" : "Recorded",
-                    },
-                    ...currentMeetings,
-                  ]
-                })
-              }
-              setScreen("home")
-            }}
-            onRecordAgain={startMeeting}
+            onBack={() => setScreen("home")}
+            onSave={saveAndGoHistory}
           />
         )}
-      </main>
+
+        {screen === "saved" && (
+          <SavedScreen onGoHistory={() => setScreen("history")} onBack={() => setScreen("summary")} />
+        )}
+
+        {screen === "history" && (
+          <HistoryScreen meetings={meetings} onOpenMeeting={openMeeting} />
+        )}
+
+        {screen === "settings" && <SettingsScreen />}
+
+        <BottomNav active={tab} onNavigate={setScreen} />
+      </PhoneFrame>
 
       {showPermissionModal && (
         <PermissionModal
           onCancel={() => setShowPermissionModal(false)}
-          onConfirm={requestMicrophoneAndStartRecording}
+          onConfirm={startRecording}
         />
       )}
     </div>
   )
 }
 
-function NavItem({ icon, label, active, onClick }) {
+function PhoneFrame({ children }) {
   return (
-    <button
-      style={{
-        ...styles.navItem,
-        ...(active ? styles.navItemActive : {}),
-      }}
-      onClick={onClick}
-    >
-      <span>{icon}</span>
-      <span>{label}</span>
-    </button>
+    <main style={styles.phone}>
+      <div style={styles.phoneContent}>{children}</div>
+    </main>
+  )
+}
+
+function HomeScreen({ onStart, apiError }) {
+  return (
+    <section style={styles.screen}>
+      <Header />
+      <div style={styles.homeBody}>
+        <h1 style={styles.homeTitle}>AI Meeting Assistant</h1>
+        <p style={styles.homeText}>Record, transcribe, and summarize your meetings with AI.</p>
+        {apiError && <p style={styles.errorText}>{apiError}</p>}
+        <button style={styles.darkButton} onClick={onStart}>
+          <span style={styles.buttonIcon}>🎙️</span>
+          Start Recording
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function RecordingScreen({ recordingSeconds, recordingStatus, onStop }) {
+  return (
+    <section style={styles.screenCenter}>
+      <Header />
+      <h2 style={styles.simpleTitle}>{recordingStatus === "recording" ? "Recording..." : "Preparing..."}</h2>
+      <Waveform />
+      <p style={styles.timer}>{formatDuration(recordingSeconds)}</p>
+      <button style={styles.recordStopButton} onClick={onStop} aria-label="Stop recording">
+        <span style={styles.stopSquare} />
+      </button>
+    </section>
+  )
+}
+
+function ProcessingScreen({ processingStep }) {
+  return (
+    <section style={styles.screenCenter}>
+      <Header />
+      <h2 style={styles.processingTitle}>Processing your meeting...</h2>
+      <div style={styles.spinner} />
+      <div style={styles.processList}>
+        <ProcessItem label="Uploading audio" active={processingStep === "uploading"} done={["transcribing", "summarizing", "completed"].includes(processingStep)} />
+        <ProcessItem label="Transcribing" active={processingStep === "transcribing"} done={["summarizing", "completed"].includes(processingStep)} />
+        <ProcessItem label="Generating summary" active={processingStep === "summarizing"} done={processingStep === "completed"} />
+      </div>
+    </section>
+  )
+}
+
+function SummaryScreen({ meeting, audioUrl, transcript, timelineTranscript, summary, actionItems, decisions, apiError, onBack, onSave }) {
+  return (
+    <section style={styles.screenScrollable}>
+      <TopBack onBack={onBack} title="Meeting Summary" />
+      <div style={styles.cardStack}>
+        {apiError && <p style={styles.errorText}>{apiError}</p>}
+
+        <ResultCard title="Summary">
+          {summary ? <p style={styles.resultText}>{summary}</p> : <SkeletonLines count={4} />}
+        </ResultCard>
+
+        <ResultCard title="Key Points">
+          {summary ? <SummaryBullets summary={summary} /> : <SkeletonBullets count={3} />}
+        </ResultCard>
+
+        <ResultCard title="Action Items">
+          {actionItems.length > 0 ? (
+            <ul style={styles.checkList}>
+              {actionItems.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <p style={styles.mutedText}>No action items detected.</p>
+          )}
+        </ResultCard>
+
+        <ResultCard title="Transcript">
+          {timelineTranscript || transcript ? (
+            <p style={styles.resultText}>{timelineTranscript || transcript}</p>
+          ) : (
+            <SkeletonLines count={4} />
+          )}
+        </ResultCard>
+
+        <ResultCard title="Audio Playback">
+          {audioUrl ? <audio style={styles.audioPlayer} controls src={audioUrl} /> : <p style={styles.mutedText}>No audio available.</p>}
+        </ResultCard>
+
+        {decisions.length > 0 && (
+          <ResultCard title="Decisions">
+            <ul style={styles.checkList}>
+              {decisions.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          </ResultCard>
+        )}
+      </div>
+      <button style={styles.saveButton} onClick={onSave}>Save Meeting</button>
+      {meeting && <p style={styles.metaText}>{meeting.date} · {formatDuration(meeting.durationSeconds || 0)}</p>}
+    </section>
+  )
+}
+
+function SavedScreen({ onGoHistory, onBack }) {
+  return (
+    <section style={styles.screenCenter}>
+      <TopBack onBack={onBack} />
+      <div style={styles.successCircle}>✓</div>
+      <h2 style={styles.savedTitle}>Meeting Saved!</h2>
+      <p style={styles.mutedText}>You can view it in History.</p>
+      <button style={styles.darkButtonWide} onClick={onGoHistory}>Go to History</button>
+    </section>
+  )
+}
+
+function HistoryScreen({ meetings, onOpenMeeting }) {
+  return (
+    <section style={styles.screenScrollable}>
+      <Header />
+      <h2 style={styles.historyTitle}>History</h2>
+      <div style={styles.historyList}>
+        {meetings.length === 0 ? (
+          <div style={styles.emptyBox}>No saved meetings yet.</div>
+        ) : (
+          meetings.map((meeting) => (
+            <button key={meeting.id} style={styles.historyItem} onClick={() => onOpenMeeting(meeting)}>
+              <div>
+                <strong>{meeting.title}</strong>
+                <p>{meeting.date} · {meeting.time || ""}</p>
+              </div>
+              <span>›</span>
+            </button>
+          ))
+        )}
+      </div>
+    </section>
+  )
+}
+
+function SettingsScreen() {
+  return (
+    <section style={styles.screenScrollable}>
+      <Header />
+      <h2 style={styles.historyTitle}>Settings</h2>
+      <div style={styles.emptyBox}>Settings will be added in the next version.</div>
+    </section>
+  )
+}
+
+function Header() {
+  return <button style={styles.menuButton}>☰</button>
+}
+
+function TopBack({ onBack, title }) {
+  return (
+    <div style={styles.topBack}>
+      <button style={styles.backButton} onClick={onBack}>‹</button>
+      {title && <h2 style={styles.topTitle}>{title}</h2>}
+    </div>
+  )
+}
+
+function BottomNav({ active, onNavigate }) {
+  return (
+    <nav style={styles.bottomNav}>
+      <button style={active === "home" ? styles.navActive : styles.navButton} onClick={() => onNavigate("home")}>
+        <span>⌂</span>
+        Home
+      </button>
+      <button style={active === "history" ? styles.navActive : styles.navButton} onClick={() => onNavigate("history")}>
+        <span>◷</span>
+        History
+      </button>
+      <button style={active === "settings" ? styles.navActive : styles.navButton} onClick={() => onNavigate("settings")}>
+        <span>⚙</span>
+        Settings
+      </button>
+    </nav>
   )
 }
 
@@ -340,242 +466,90 @@ function PermissionModal({ onCancel, onConfirm }) {
     <div style={styles.modalOverlay}>
       <div style={styles.modalCard}>
         <div style={styles.modalIcon}>🎙️</div>
-        <p style={styles.eyebrow}>Microphone Permission</p>
-        <h2 style={styles.modalTitle}>允許使用麥克風</h2>
-        <p style={styles.modalText}>
-          開始錄音前，瀏覽器會跳出麥克風授權通知。請選擇「允許」，這樣才能錄製會議音訊並產生逐字稿。
-        </p>
-        <div style={styles.modalHint}>
-          手機測試若沒有跳出授權視窗，通常是因為目前網址不是 HTTPS。建議先用電腦 localhost 測試，或之後部署到 HTTPS 網址。
-        </div>
-        <div style={styles.buttonRow}>
-          <button style={styles.secondaryButton} onClick={onCancel}>Cancel</button>
-          <button style={styles.primaryButton} onClick={onConfirm}>Allow Microphone</button>
+        <h2 style={styles.modalTitle}>Allow microphone</h2>
+        <p style={styles.modalText}>The browser will ask for microphone permission before recording starts.</p>
+        <div style={styles.modalActions}>
+          <button style={styles.lightButton} onClick={onCancel}>Cancel</button>
+          <button style={styles.darkButtonWide} onClick={onConfirm}>Allow</button>
         </div>
       </div>
     </div>
   )
 }
 
-function HomeScreen({ meetings, onNewMeeting, onOpenMeeting }) {
+function ResultCard({ title, children }) {
   return (
-    <section>
-      <div style={window.innerWidth < 768 ? styles.heroGridMobile : styles.heroGrid}>
-        <div style={styles.heroCard}>
-          <p style={styles.eyebrow}>AI Copilot</p>
-          <h2 style={window.innerWidth < 768 ? styles.heroTitleMobile : styles.heroTitle}>Record, transcribe, and summarize meetings in one place.</h2>
-          <p style={styles.heroText}>
-            Record meeting audio first. Transcript and AI summary will be generated after the backend is connected.
-          </p>
-          <button style={styles.primaryButtonLarge} onClick={onNewMeeting}>
-            Start New Meeting
-          </button>
-        </div>
-
-        <StatCard label="Saved Meetings" value={meetings.length.toString()} />
-        <StatCard label="AI Summaries" value="Pending" />
-        <StatCard label="Backend" value="Next" />
-      </div>
-
-      <div style={styles.sectionHeader}>
-        <h2 style={styles.sectionTitle}>Recent Meetings</h2>
-        <button style={styles.ghostButton}>View All</button>
-      </div>
-
-      {meetings.length === 0 ? (
-        <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>🎙️</div>
-          <h3 style={styles.emptyTitle}>No meetings yet</h3>
-          <p style={styles.mutedText}>Start your first recording to create a meeting record.</p>
-          <button style={styles.primaryButton} onClick={onNewMeeting}>Create First Meeting</button>
-        </div>
-      ) : (
-        <div style={styles.meetingList}>
-          {meetings.map((meeting) => (
-            <button key={meeting.id} style={styles.meetingCard} onClick={() => onOpenMeeting(meeting)}>
-              <div>
-                <h3 style={styles.meetingTitle}>{meeting.title}</h3>
-                <p style={styles.mutedText}>{meeting.date} · {formatDuration(meeting.durationSeconds || 0)}</p>
-                <p style={styles.meetingSummary}>{meeting.summary || "Audio recording saved."}</p>
-              </div>
-              <span style={styles.statusPill}>{meeting.status}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </section>
+    <div style={styles.resultCard}>
+      <h3 style={styles.resultTitle}>{title}</h3>
+      {children}
+    </div>
   )
 }
 
-function SetupScreen({ meetingTitle, setMeetingTitle, recordingError, onCancel, onStart }) {
+function ProcessItem({ label, active, done }) {
   return (
-    <section style={styles.centerPanel}>
-      <div style={styles.formCard}>
-        <p style={styles.eyebrow}>Step 1</p>
-        <h2 style={styles.sectionTitle}>Setup Meeting</h2>
-        <p style={styles.mutedText}>Fill in basic meeting information before recording.</p>
-        {recordingError && <p style={styles.errorText}>{recordingError}</p>}
-
-        <label style={styles.label}>Meeting Title</label>
-        <input
-          style={styles.input}
-          value={meetingTitle}
-          onChange={(event) => setMeetingTitle(event.target.value)}
-          placeholder="Enter meeting title"
-        />
-
-        <label style={styles.label}>Participants</label>
-        <input style={styles.input} placeholder="Optional" />
-
-        <label style={styles.label}>Language</label>
-        <select style={styles.input} defaultValue="zh-TW">
-          <option value="zh-TW">繁體中文</option>
-          <option value="en">English</option>
-          <option value="mixed">Chinese + English</option>
-        </select>
-
-        <div style={styles.buttonRow}>
-          <button style={styles.secondaryButton} onClick={onCancel}>Cancel</button>
-          <button style={styles.primaryButton} onClick={onStart}>Start Recording</button>
-        </div>
-      </div>
-    </section>
+    <div style={styles.processItem}>
+      <span style={done ? styles.processDone : active ? styles.processActive : styles.processIdle}>{done ? "✓" : active ? "⌁" : "○"}</span>
+      <span>{label}</span>
+    </div>
   )
 }
 
-function RecordingScreen({ meetingTitle, recordingSeconds, recordingStatus, onStop }) {
-  const formattedTime = formatDuration(recordingSeconds)
-
+function Waveform() {
   return (
-    <section style={window.innerWidth < 768 ? styles.recordingLayoutMobile : styles.recordingLayout}>
-      <div style={styles.recordingCard}>
-        <p style={styles.eyebrow}>Live Recording</p>
-        <h2 style={styles.sectionTitle}>{meetingTitle}</h2>
-        <p style={styles.timer}>{formattedTime}</p>
-        <p style={styles.mutedText}>{recordingStatus === "recording" ? "Microphone is recording now." : "Preparing audio..."}</p>
-
-        <div style={styles.micOuter}>
-          <div style={styles.micInner}>REC</div>
-        </div>
-
-        <div style={styles.waveform}>
-          {Array.from({ length: 28 }).map((_, index) => (
-            <span
-              key={index}
-              style={{
-                ...styles.waveBar,
-                height: `${18 + (index % 7) * 8}px`,
-              }}
-            />
-          ))}
-        </div>
-
-        <button style={styles.dangerButton} onClick={onStop}>Stop Recording</button>
-      </div>
-
-      <div style={styles.transcriptPanel}>
-        <h3 style={styles.cardTitle}>Live Transcript Preview</h3>
-        <p style={styles.mutedText}>Live transcript will appear here after the speech-to-text backend is connected.</p>
-      </div>
-    </section>
+    <div style={styles.waveform}>
+      {Array.from({ length: 30 }).map((_, index) => (
+        <span key={index} style={{ ...styles.waveBar, height: `${18 + (index % 6) * 8}px` }} />
+      ))}
+    </div>
   )
 }
 
-function ProcessingScreen({ processingStatus }) {
-  const statusText = {
-    uploading: "Uploading audio...",
-    transcribing: "Transcribing meeting audio...",
-    summarizing: "Generating AI summary...",
-    completed: "Finalizing result...",
-    failed: "Processing failed.",
+function SkeletonLines({ count }) {
+  return (
+    <div style={styles.skeletonGroup}>
+      {Array.from({ length: count }).map((_, index) => (
+        <span key={index} style={{ ...styles.skeletonLine, width: `${90 - index * 10}%` }} />
+      ))}
+    </div>
+  )
+}
+
+function SkeletonBullets({ count }) {
+  return (
+    <div style={styles.skeletonGroup}>
+      {Array.from({ length: count }).map((_, index) => (
+        <div key={index} style={styles.skeletonBulletRow}>
+          <span style={styles.bulletDot} />
+          <span style={{ ...styles.skeletonLine, width: `${78 - index * 8}%` }} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SummaryBullets({ summary }) {
+  const items = summary
+    .split("\n")
+    .map((line) => line.replace(/^[-#*\d.\s]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 4)
+
+  if (items.length === 0) {
+    return <p style={styles.resultText}>{summary}</p>
   }
 
   return (
-    <section style={styles.centerPanel}>
-      <div style={styles.processingCard}>
-        <div style={styles.spinner} />
-        <h2 style={styles.sectionTitle}>Processing your meeting</h2>
-        <p style={styles.mutedText}>{statusText[processingStatus] || "Preparing audio..."}</p>
-      </div>
-    </section>
-  )
-}
-
-function SummaryScreen({ meeting, recordingSeconds, audioUrl, transcript, summary, actionItems, decisions, apiError, onBackHome, onRecordAgain }) {
-  const title = meeting?.title || "Untitled Meeting"
-  const date = meeting?.date || new Date().toLocaleDateString("zh-TW")
-  return (
-    <section>
-      <div style={window.innerWidth < 768 ? styles.summaryHeaderMobile : styles.summaryHeader}>
-        <div>
-          <p style={styles.eyebrow}>Generated Summary</p>
-          <h2 style={styles.sectionTitle}>{title}</h2>
-          <p style={styles.mutedText}>{date} · {formatDuration(recordingSeconds)} · Recording saved</p>
-          {apiError && <p style={styles.errorText}>{apiError}</p>}
-        </div>
-
-        <div style={styles.buttonRow}>
-          <button style={styles.secondaryButton} onClick={onRecordAgain}>Record Again</button>
-          <button style={styles.primaryButton} onClick={onBackHome}>Save Summary</button>
-        </div>
-      </div>
-
-      <div style={window.innerWidth < 768 ? styles.summaryGridMobile : styles.summaryGrid}>
-        <div style={styles.card}>
-          <h3 style={styles.cardTitle}>Audio Playback</h3>
-          {audioUrl ? (
-            <audio style={styles.audioPlayer} controls src={audioUrl} />
-          ) : (
-            <p style={styles.mutedText}>No recording available yet.</p>
-          )}
-        </div>
-        <div style={styles.card}>
-          <h3 style={styles.cardTitle}>Transcript</h3>
-          {transcript ? (
-            <p style={styles.resultText}>{transcript}</p>
-          ) : (
-            <p style={styles.mutedText}>Transcript is not generated yet.</p>
-          )}
-        </div>
-        <div style={styles.card}>
-          <h3 style={styles.cardTitle}>AI Summary</h3>
-          {summary ? (
-            <p style={styles.resultText}>{summary}</p>
-          ) : (
-            <p style={styles.mutedText}>AI summary is not generated yet.</p>
-          )}
-
-          {actionItems.length > 0 && (
-            <div style={styles.resultSection}>
-              <h4 style={styles.resultSectionTitle}>Action Items</h4>
-              <ul style={styles.summaryList}>
-                {actionItems.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {decisions.length > 0 && (
-            <div style={styles.resultSection}>
-              <h4 style={styles.resultSectionTitle}>Decisions</h4>
-              <ul style={styles.summaryList}>
-                {decisions.map((item, index) => (
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
+    <ul style={styles.summaryList}>
+      {items.map((item, index) => (
+        <li key={index}>{item}</li>
+      ))}
+    </ul>
   )
 }
 
 function formatDuration(totalSeconds) {
-  const minutes = Math.floor(totalSeconds / 60)
-    .toString()
-    .padStart(2, "0")
+  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0")
   const seconds = (totalSeconds % 60).toString().padStart(2, "0")
   return `${minutes}:${seconds}`
 }
@@ -592,32 +566,16 @@ function normalizeMeetingResult(result) {
 
   return {
     transcript: result.transcript || result.text || "",
-    summary:
-      typeof summaryValue === "string"
-        ? summaryValue
-        : summaryObject.summary || summaryObject.overview || "",
-    actionItems:
-      result.action_items ||
-      result.actionItems ||
-      summaryObject.action_items ||
-      summaryObject.actionItems ||
-      [],
-    decisions:
-      result.decisions ||
-      summaryObject.decisions ||
-      [],
+    timelineTranscript: result.timeline_transcript || result.timelineTranscript || "",
+    summary: typeof summaryValue === "string" ? summaryValue : summaryObject.summary || summaryObject.overview || "",
+    actionItems: result.action_items || result.actionItems || summaryObject.action_items || summaryObject.actionItems || [],
+    decisions: result.decisions || summaryObject.decisions || [],
   }
 }
 
-function StatCard({ label, value }) {
-  return (
-    <div style={styles.statCard}>
-      <p style={styles.mutedText}>{label}</p>
-      <h2 style={styles.statValue}>{value}</h2>
-    </div>
-  )
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 }
-
 
 const styles = {
   appShell: {
