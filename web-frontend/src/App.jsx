@@ -120,19 +120,36 @@ export default function App() {
         });
       };
 
-      let res = await sendAudioRequest("file", "title");
+      const requestAttempts = [
+        ["file", "title"],
+        ["file", "meeting_title"],
+        ["audio_file", "title"],
+        ["audio_file", "meeting_title"],
+        ["audio", "title"],
+        ["audio", "meeting_title"],
+      ];
 
-      if (res.status === 422) {
-        res = await sendAudioRequest("audio_file", "meeting_title");
+      let res = null;
+      let lastErrorText = "";
+
+      for (const [fileFieldName, titleFieldName] of requestAttempts) {
+        res = await sendAudioRequest(fileFieldName, titleFieldName);
+
+        if (res.ok) {
+          break;
+        }
+
+        lastErrorText = await res.clone().text();
+
+        if (res.status !== 422) {
+          break;
+        }
       }
 
-      if (res.status === 422) {
-        res = await sendAudioRequest("audio", "title");
-      }
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Backend error: ${res.status}`);
+      if (!res || !res.ok) {
+        throw new Error(
+          lastErrorText || `Backend error: ${res ? res.status : "no response"}`
+        );
       }
 
       setProcessingStep("summarizing");
@@ -146,7 +163,7 @@ export default function App() {
       loadHistory();
     } catch (err) {
       console.error(err);
-      setError(`AI 處理失敗：${err.message || "請看 Render Logs。"}`);
+      setError(`AI 處理失敗：${err.message || "Unknown error"}`);
       setScreen("summary");
     }
   }
@@ -520,6 +537,8 @@ const styles = {
     borderRadius: 12,
     padding: 14,
     marginTop: 16,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
   },
   check: {
     marginTop: 160,
