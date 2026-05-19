@@ -2,30 +2,24 @@
 
 ## Full UI Design
 
-![UI Flow](image/meeting-assistant-ui-flow.jpg)
+![UI Flow](image/finalUI.jpg)
 
 ## Overview
 
-AI Meeting Assistant is a mobile-first AI meeting application that helps users record, upload, transcribe, summarize, and manage meeting content automatically.
+AI Meeting Assistant is a mobile-first AI meeting application that helps users record meetings, generate transcripts, summarize discussions, and save meeting history automatically.
 
-This document defines the end-to-end user flow of the application.
+This document defines the MVP user flow.
 
 ---
 
-## Full User Flow
+# MVP User Flow
 
 ```text
 Launch App
     ↓
-Splash Screen
-    ↓
-Onboarding
-    ↓
-Login / Sign Up
-    ↓
 Home Dashboard
     ↓
-Start New Meeting
+New Meeting
  ┌───────────────┐
  ↓               ↓
 Record Audio   Upload Audio
@@ -34,160 +28,187 @@ Recording      Audio Preview
  └───────↓───────┘
         Processing
               ↓
-       Meeting Result
+        Meeting Result
     ┌─────┬─────┬─────┐
     ↓     ↓     ↓     ↓
 Overview Transcript Summary Action Items
               ↓
-        Save to History
+        Save Meeting
               ↓
         Meeting History
               ↓
-     Meeting Details
-              ↓
-     Settings / Export
+        Meeting Detail
 ```
 
 ---
 
-## Screens
+# Screens
 
-### 1. Splash Screen
-
-Purpose:
-- Display app branding
-- Initialize system resources
-
----
-
-### 2. Onboarding
+## 1. Home Dashboard
 
 Purpose:
-- Explain core product value
+- Entry point of the application
+- Access recent meetings
+- Start a new meeting
 
 Features:
-- AI meeting transcription
-- AI summary generation
-- Action item extraction
+- Recent meetings list
+- Search meeting history
+- New Meeting button
 
 ---
 
-### 3. Login / Sign Up
+## 2. New Meeting
 
-Authentication methods:
-- Google Login
-- Apple Login
-- Email / Password
+Purpose:
+- Create a new meeting session
 
----
-
-### 4. Home Dashboard
-
-Functions:
-- View recent meetings
-- Start new meeting
-- Search history
-- Navigate to settings
-
----
-
-### 5. New Meeting Setup
-
-User inputs:
-
-- Meeting title
+User Inputs:
+- Meeting title (optional)
 - Language selection
-- Summary template
 
 Options:
-
 - Record Audio
 - Upload Audio File
 
+Supported Formats:
+- MP3
+- WAV
+- M4A
+
 ---
 
-### 6. Recording Screen
+## 3. Recording Screen
+
+Purpose:
+- Record meeting audio
 
 Functions:
-
 - Live recording timer
-- Audio waveform
 - Pause recording
-- Add note
+- Resume recording
 - Stop recording
+- Audio waveform (future version)
 
 ---
 
-### 7. Upload Audio
+## 4. Upload Audio
 
-Supported formats:
-
-- MP3
-- M4A
-- WAV
+Purpose:
+- Upload existing meeting audio
 
 Flow:
 
-Upload → Audio Preview → Confirm Upload
+Select Audio
+    ↓
+Audio Preview
+    ↓
+Confirm Upload
 
 ---
 
-### 8. Processing Screen
+## 5. Processing Screen
 
-Backend workflow:
+Purpose:
+- Process audio automatically
 
-1. Upload audio
-2. Speech-to-text transcription
-3. Summary generation
-4. Action item extraction
+Pipeline:
 
-Status tracking:
+1. Upload Audio
+2. Speech-to-Text Transcription
+3. Transcript Cleanup
+4. AI Summary Generation
+5. Action Item Extraction
+
+Agent Architecture:
+
+### Transcription Agent
+Responsible for:
+- Speech-to-text
+- Speaker diarization
+- Timestamp generation
+
+### Meeting Analysis Agent
+Responsible for:
+- Meeting summary
+- Key points
+- Decisions
+- Action items
+- Open questions
+
+Status:
 - Uploading
 - Transcribing
 - Summarizing
-- Extracting action items
+- Finalizing
 
 ---
 
-### 9. Meeting Result
+## 6. Meeting Result
 
-#### Overview
+### Overview
+Shows:
 - Meeting title
-- Key summary
+- Recording duration
+- Key discussion
 - Key decisions
 - Next steps
 
-#### Transcript
-- Full meeting transcript
+### Transcript
+Shows:
+- Full transcript
+- Timestamped conversation
+- Speaker separation (future version)
 
-#### Summary
-- AI-generated summary
+### Summary
+Shows:
+- AI-generated meeting summary
+- Main discussion points
 
-#### Action Items
-- Auto-generated tasks
-- Task owner
-- Due date
+### Action Items
+Shows:
+- Automatically extracted tasks
+- Follow-up items
+
+Actions:
+- Save Meeting
+- Export (future version)
 
 ---
 
-### 10. Meeting History
+## 7. Meeting History
+
+Purpose:
+- View previous meetings
 
 Functions:
 - Search meetings
-- Open previous meetings
+- Open meeting result
 - Delete meeting
-- Re-open summary
 
 ---
 
-### 11. Settings / Export
+## 8. Meeting Detail
 
-Settings:
-- AI Model selection
-- Language
-- Summary length
+Purpose:
+- Re-open saved meeting
 
-Export:
-- PDF
-- Markdown
-- Text
+Tabs:
+- Overview
+- Transcript
+- Summary
+- Action Items
+
+---
+
+# Future Scope (Post-MVP)
+
+Planned Features:
+- Login / Authentication
+- Google / Apple Sign-In
+- AI Model Selection
+- PDF / Markdown Export
+- Speaker Diarization
+- Multi-language Support
+- Team Collaboration
+- Cloud Sync
