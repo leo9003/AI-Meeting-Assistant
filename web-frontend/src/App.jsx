@@ -163,7 +163,12 @@ export default function App() {
       loadHistory();
     } catch (err) {
       console.error(err);
-      setError(`AI 處理失敗：${err.message || "Unknown error"}`);
+      const message = err.message || "Unknown error";
+      const friendlyMessage =
+        message === "Load failed" || message === "Failed to fetch"
+          ? "前端連不到後端，通常是 CORS 或 Render 後端冷啟動。請等 Render 醒來後再試一次。"
+          : message;
+      setError(`AI 處理失敗：${friendlyMessage}`);
       setScreen("summary");
     }
   }
