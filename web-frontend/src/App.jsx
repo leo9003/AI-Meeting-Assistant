@@ -27,7 +27,15 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/meetings`);
       if (!res.ok) return;
       const data = await res.json();
-      setHistory(Array.isArray(data) ? data : []);
+      if (Array.isArray(data)) {
+        setHistory(data);
+      } else if (Array.isArray(data.meetings)) {
+        setHistory(data.meetings);
+      } else if (Array.isArray(data.items)) {
+        setHistory(data.items);
+      } else {
+        setHistory([]);
+      }
     } catch {
       // ignore
     }
@@ -94,27 +102,43 @@ export default function App() {
 
   async function processAudio(blob, mimeType) {
     try {
-      const formData = new FormData();
-      const ext = mimeType.includes("webm") ? "webm" : "m4a";
-
-      formData.append("file", blob, `meeting-${Date.now()}.${ext}`);
-      formData.append("title", `Meeting ${new Date().toLocaleString()}`);
+      const safeMimeType = mimeType || blob.type || "audio/mp4";
+      const ext = safeMimeType.includes("webm") ? "webm" : "m4a";
+      const fileName = `meeting-${Date.now()}.${ext}`;
+      const meetingTitle = `Meeting ${new Date().toLocaleString()}`;
 
       setProcessingStep("transcribing");
 
-      const res = await fetch(`${API_BASE_URL}/meetings/transcribe-summary`, {
-        method: "POST",
-        body: formData,
-      });
+      const sendAudioRequest = async (fileFieldName, titleFieldName) => {
+        const formData = new FormData();
+        formData.append(fileFieldName, blob, fileName);
+        formData.append(titleFieldName, meetingTitle);
+
+        return fetch(`${API_BASE_URL}/meetings/transcribe-summary`, {
+          method: "POST",
+          body: formData,
+        });
+      };
+
+      let res = await sendAudioRequest("file", "title");
+
+      if (res.status === 422) {
+        res = await sendAudioRequest("audio_file", "meeting_title");
+      }
+
+      if (res.status === 422) {
+        res = await sendAudioRequest("audio", "title");
+      }
 
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(text);
+        throw new Error(text || `Backend error: ${res.status}`);
       }
 
       setProcessingStep("summarizing");
 
       const data = await res.json();
+      console.log("AI result from backend:", data);
 
       setResult(data);
       setProcessingStep("done");
@@ -122,14 +146,14 @@ export default function App() {
       loadHistory();
     } catch (err) {
       console.error(err);
-      setError("AI 處理失敗，請看 Render Logs。");
+      setError(`AI 處理失敗：${err.message || "請看 Render Logs。"}`);
       setScreen("summary");
     }
   }
 
   async function openHistoryItem(item) {
     try {
-      const id = item.id || item.meeting_id;
+      const id = item.id || item.meeting_id || item.meetingId;
       const res = await fetch(`${API_BASE_URL}/meetings/${id}`);
       const data = await res.json();
       setResult(data);
@@ -218,8 +242,18 @@ function Processing({ step }) {
 }
 
 function Summary({ result, audioUrl, error, onSave, onBack }) {
-  const transcript = result?.timeline_transcript || result?.transcript || "";
-  const summary = result?.summary || "";
+  const transcript =
+    result?.timeline_transcript ||
+    result?.timelineTranscript ||
+    result?.transcript ||
+    result?.text ||
+    "";
+
+  const summaryValue = result?.summary || result?.ai_summary || result?.meeting_summary || "";
+  const summary =
+    typeof summaryValue === "string"
+      ? summaryValue
+      : summaryValue?.summary || summaryValue?.overview || "";
 
   return (
     <main style={styles.scroll}>
@@ -283,12 +317,12 @@ function History({ history, onOpen }) {
 
       {history.map((item) => (
         <button
-          key={item.id || item.meeting_id}
+          key={item.id || item.meeting_id || item.meetingId}
           style={styles.historyItem}
           onClick={() => onOpen(item)}
         >
           <div>
-            <strong>{item.meeting_title || item.title || "Untitled Meeting"}</strong>
+            <strong>{item.meeting_title || item.meetingTitle || item.title || "Untitled Meeting"}</strong>
             <p style={styles.small}>
               {item.created_at ? new Date(item.created_at).toLocaleString() : ""}
             </p>
