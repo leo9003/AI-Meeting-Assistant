@@ -5,28 +5,47 @@ const API_BASE_URL =
 
 export default function App() {
   const [screen, setScreen] = useState("home");
+  const [screenDirection, setScreenDirection] = useState("forward");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [processingStep, setProcessingStep] = useState("idle");
   const [audioUrl, setAudioUrl] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [history, setHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [audioLevels, setAudioLevels] = useState(Array(26).fill(0.25));
+  const [recordingTitle, setRecordingTitle] = useState("");
 
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const secondsRef = useRef(0);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const streamRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
-    return () => clearInterval(timerRef.current);
+    return () => {
+      stopAudioVisualizer();
+      clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
   }, []);
+
+  function navigate(nextScreen, direction = "forward") {
+    setScreenDirection(direction);
+    setScreen(nextScreen);
+  }
 
   async function loadHistory() {
     try {
+      setIsLoadingHistory(true);
       const res = await fetch(`${API_BASE_URL}/meetings`);
       if (!res.ok) return;
       const data = await res.json();
+
       if (Array.isArray(data)) {
         setHistory(data);
       } else if (Array.isArray(data.meetings)) {
@@ -37,7 +56,9 @@ export default function App() {
         setHistory([]);
       }
     } catch {
-      // ignore
+      // History is optional. Keep app usable even if backend list endpoint is unavailable.
+    } finally {
+      setIsLoadingHistory(false);
     }
   }
 
@@ -46,11 +67,19 @@ export default function App() {
       setError("");
       setResult(null);
       setAudioUrl("");
+      setAudioLevels(Array(26).fill(0.25));
       chunksRef.current = [];
       secondsRef.current = 0;
       setRecordingSeconds(0);
 
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("此瀏覽器不支援麥克風錄音，請改用 Safari 或 Chrome。" );
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      startAudioVisualizer(stream);
 
       const mimeType = MediaRecorder.isTypeSupported("audio/mp4")
         ? "audio/mp4"
@@ -61,12 +90,13 @@ export default function App() {
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
       recorderRef.current = recorder;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
       };
 
       recorder.onstop = async () => {
         clearInterval(timerRef.current);
+        stopAudioVisualizer();
         stream.getTracks().forEach((track) => track.stop());
 
         const blob = new Blob(chunksRef.current, {
@@ -80,7 +110,7 @@ export default function App() {
       };
 
       recorder.start();
-      setScreen("recording");
+      navigate("recording", "forward");
 
       timerRef.current = setInterval(() => {
         secondsRef.current += 1;
@@ -88,16 +118,31 @@ export default function App() {
       }, 1000);
     } catch (err) {
       console.error(err);
-      setError("麥克風授權失敗，請允許瀏覽器使用麥克風。");
+      setError("麥克風授權失敗，請允許瀏覽器使用麥克風後再試一次。" );
     }
   }
 
   function stopRecording() {
+    if (!recorderRef.current || recorderRef.current.state === "inactive") {
+      return;
+    }
+
+    navigate("processing", "forward");
+    setProcessingStep("uploading");
+    recorderRef.current.stop();
+  }
+
+  function cancelRecording() {
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      setScreen("processing");
-      setProcessingStep("uploading");
       recorderRef.current.stop();
     }
+
+    clearInterval(timerRef.current);
+    stopAudioVisualizer();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    setRecordingSeconds(0);
+    setAudioLevels(Array(26).fill(0.25));
+    navigate("home", "back");
   }
 
   async function processAudio(blob, mimeType) {
@@ -105,8 +150,11 @@ export default function App() {
       const safeMimeType = mimeType || blob.type || "audio/mp4";
       const ext = safeMimeType.includes("webm") ? "webm" : "m4a";
       const fileName = `meeting-${Date.now()}.${ext}`;
-      const meetingTitle = `Meeting ${new Date().toLocaleString()}`;
+      const meetingTitle =
+        recordingTitle.trim() || `Meeting ${new Date().toLocaleString()}`;
 
+      setProcessingStep("uploading");
+      await wait(250);
       setProcessingStep("transcribing");
 
       const formData = new FormData();
@@ -124,70 +172,163 @@ export default function App() {
       }
 
       setProcessingStep("summarizing");
-
       const data = await res.json();
       console.log("AI result from backend:", data);
 
       setResult(data);
       setProcessingStep("done");
-      setScreen("summary");
+      navigate("summary", "forward");
       loadHistory();
     } catch (err) {
       console.error(err);
       const message = err.message || "Unknown error";
       const friendlyMessage =
         message === "Load failed" || message === "Failed to fetch"
-          ? "前端連不到後端，通常是 CORS 或 Render 後端冷啟動。請等 Render 醒來後再試一次。"
+          ? "前端連不到後端，通常是 Render 後端冷啟動或網路暫時中斷。請先打開後端 /docs 讓 Render 醒來後再試一次。"
           : message;
       setError(`AI 處理失敗：${friendlyMessage}`);
-      setScreen("summary");
+      navigate("summary", "forward");
     }
   }
 
   async function openHistoryItem(item) {
     try {
+      setError("");
       const id = item.id || item.meeting_id || item.meetingId;
+      if (!id) {
+        setResult(item);
+        navigate("summary", "forward");
+        return;
+      }
+
       const res = await fetch(`${API_BASE_URL}/meetings/${id}`);
+      if (!res.ok) throw new Error("Meeting detail not found");
       const data = await res.json();
       setResult(data);
-      setScreen("summary");
+      setAudioUrl("");
+      navigate("summary", "forward");
     } catch {
       setResult(item);
-      setScreen("summary");
+      setAudioUrl("");
+      navigate("summary", "forward");
     }
+  }
+
+  function startAudioVisualizer(stream) {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.78;
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const draw = () => {
+        analyser.getByteFrequencyData(dataArray);
+
+        const nextLevels = Array.from({ length: 26 }, (_, index) => {
+          const bucket = dataArray[index % dataArray.length] || 0;
+          const normalized = Math.max(0.16, Math.min(1, bucket / 140));
+          return normalized;
+        });
+
+        setAudioLevels(nextLevels);
+        animationFrameRef.current = requestAnimationFrame(draw);
+      };
+
+      draw();
+    } catch (err) {
+      console.warn("Audio visualizer unavailable", err);
+    }
+  }
+
+  function stopAudioVisualizer() {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+
+    analyserRef.current = null;
   }
 
   return (
     <div style={styles.page}>
       <div style={styles.appFrame}>
         <div style={styles.contentArea}>
-          {screen === "home" && <Home onStart={startRecording} error={error} />}
-          {screen === "recording" && (
-            <Recording seconds={recordingSeconds} onStop={stopRecording} />
-          )}
-          {screen === "processing" && <Processing step={processingStep} />}
-          {screen === "summary" && (
-            <Summary
-              result={result}
-              audioUrl={audioUrl}
-              error={error}
-              onSave={() => setScreen("saved")}
-              onBack={() => setScreen("home")}
-            />
-          )}
-          {screen === "saved" && <Saved onHistory={() => setScreen("history")} />}
-          {screen === "history" && (
-            <History history={history} onOpen={openHistoryItem} />
-          )}
+          <div
+            key={screen}
+            style={
+              screenDirection === "back"
+                ? styles.screenTransitionBack
+                : styles.screenTransitionForward
+            }
+          >
+            {screen === "home" && (
+              <Home
+                title={recordingTitle}
+                setTitle={setRecordingTitle}
+                onStart={startRecording}
+                error={error}
+              />
+            )}
+            {screen === "recording" && (
+              <Recording
+                seconds={recordingSeconds}
+                levels={audioLevels}
+                onStop={stopRecording}
+                onCancel={cancelRecording}
+              />
+            )}
+            {screen === "processing" && <Processing step={processingStep} />}
+            {screen === "summary" && (
+              <Summary
+                result={result}
+                audioUrl={audioUrl}
+                error={error}
+                onSave={() => navigate("saved", "forward")}
+                onBack={() => navigate("home", "back")}
+                onRecordAgain={startRecording}
+              />
+            )}
+            {screen === "saved" && (
+              <Saved
+                onHistory={() => navigate("history", "forward")}
+                onHome={() => navigate("home", "back")}
+              />
+            )}
+            {screen === "history" && (
+              <History
+                history={history}
+                isLoading={isLoadingHistory}
+                onOpen={openHistoryItem}
+                onRefresh={loadHistory}
+              />
+            )}
+            {screen === "settings" && <Settings />}
+          </div>
         </div>
 
-        <BottomNav screen={screen} setScreen={setScreen} />
+        <BottomNav screen={screen} navigate={navigate} />
       </div>
     </div>
   );
 }
 
-function Home({ onStart, error }) {
+function Home({ title, setTitle, onStart, error }) {
   return (
     <main style={styles.center}>
       <Menu />
@@ -195,6 +336,12 @@ function Home({ onStart, error }) {
       <p style={styles.subtitle}>
         Record, transcribe, and summarize your meetings with AI.
       </p>
+      <input
+        style={styles.titleInput}
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        placeholder="Meeting title (optional)"
+      />
       {error && <p style={styles.error}>{error}</p>}
       <button style={styles.blackButton} onClick={onStart}>
         🎙 Start Recording
@@ -203,14 +350,16 @@ function Home({ onStart, error }) {
   );
 }
 
-function Recording({ seconds, onStop }) {
+function Recording({ seconds, levels, onStop, onCancel }) {
   return (
     <main style={styles.center}>
-      <Menu />
+      <button style={styles.cancelButton} onClick={onCancel}>
+        Cancel
+      </button>
       <h2 style={styles.heading}>Recording...</h2>
-      <Wave />
+      <Wave levels={levels} />
       <div style={styles.timer}>{formatTime(seconds)}</div>
-      <button style={styles.stopButton} onClick={onStop}>
+      <button style={styles.stopButton} onClick={onStop} aria-label="Stop recording">
         ■
       </button>
     </main>
@@ -227,7 +376,10 @@ function Processing({ step }) {
         <Step done={step !== "uploading"} active={step === "uploading"}>
           Uploading audio
         </Step>
-        <Step done={step === "summarizing" || step === "done"} active={step === "transcribing"}>
+        <Step
+          done={step === "summarizing" || step === "done"}
+          active={step === "transcribing"}
+        >
           Transcribing
         </Step>
         <Step done={step === "done"} active={step === "summarizing"}>
@@ -238,7 +390,7 @@ function Processing({ step }) {
   );
 }
 
-function Summary({ result, audioUrl, error, onSave, onBack }) {
+function Summary({ result, audioUrl, error, onSave, onBack, onRecordAgain }) {
   const transcript =
     result?.timeline_transcript ||
     result?.timelineTranscript ||
@@ -246,7 +398,8 @@ function Summary({ result, audioUrl, error, onSave, onBack }) {
     result?.text ||
     "";
 
-  const summaryValue = result?.summary || result?.ai_summary || result?.meeting_summary || "";
+  const summaryValue =
+    result?.summary || result?.ai_summary || result?.meeting_summary || "";
   const summary =
     typeof summaryValue === "string"
       ? summaryValue
@@ -255,7 +408,9 @@ function Summary({ result, audioUrl, error, onSave, onBack }) {
   return (
     <main style={styles.scroll}>
       <div style={styles.topBar}>
-        <button style={styles.back} onClick={onBack}>‹</button>
+        <button style={styles.back} onClick={onBack}>
+          ‹
+        </button>
         <h2 style={styles.topBarTitle}>Meeting Summary</h2>
         <span style={styles.topBarSpacer} />
       </div>
@@ -284,14 +439,19 @@ function Summary({ result, audioUrl, error, onSave, onBack }) {
         )}
       </Card>
 
-      <button style={styles.blackButtonWide} onClick={onSave}>
-        Save Meeting
-      </button>
+      <div style={styles.summaryActions}>
+        <button style={styles.secondaryActionButton} onClick={onRecordAgain}>
+          Record Again
+        </button>
+        <button style={styles.blackButtonWide} onClick={onSave}>
+          Save Meeting
+        </button>
+      </div>
     </main>
   );
 }
 
-function Saved({ onHistory }) {
+function Saved({ onHistory, onHome }) {
   return (
     <main style={styles.center}>
       <div style={styles.check}>✓</div>
@@ -300,17 +460,28 @@ function Saved({ onHistory }) {
       <button style={styles.blackButton} onClick={onHistory}>
         Go to History
       </button>
+      <button style={styles.textButton} onClick={onHome}>
+        Back Home
+      </button>
     </main>
   );
 }
 
-function History({ history, onOpen }) {
+function History({ history, isLoading, onOpen, onRefresh }) {
   return (
     <main style={styles.scroll}>
-      <Menu />
-      <h2 style={styles.heading}>History</h2>
+      <div style={styles.historyHeader}>
+        <Menu />
+        <button style={styles.refreshButton} onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+      <h2 style={styles.historyHeading}>History</h2>
 
-      {history.length === 0 && <p style={styles.muted}>No meetings yet.</p>}
+      {isLoading && <p style={styles.muted}>Loading meetings...</p>}
+      {!isLoading && history.length === 0 && (
+        <p style={styles.muted}>No meetings yet.</p>
+      )}
 
       {history.map((item) => (
         <button
@@ -319,7 +490,9 @@ function History({ history, onOpen }) {
           onClick={() => onOpen(item)}
         >
           <div>
-            <strong>{item.meeting_title || item.meetingTitle || item.title || "Untitled Meeting"}</strong>
+            <strong>
+              {item.meeting_title || item.meetingTitle || item.title || "Untitled Meeting"}
+            </strong>
             <p style={styles.small}>
               {item.created_at ? new Date(item.created_at).toLocaleString() : ""}
             </p>
@@ -331,10 +504,25 @@ function History({ history, onOpen }) {
   );
 }
 
+function Settings() {
+  return (
+    <main style={styles.scroll}>
+      <Menu />
+      <h2 style={styles.historyHeading}>Settings</h2>
+      <Card title="Backend">
+        <p style={styles.text}>{API_BASE_URL}</p>
+      </Card>
+      <Card title="Version">
+        <p style={styles.text}>MVP demo build</p>
+      </Card>
+    </main>
+  );
+}
+
 function Card({ title, children }) {
   return (
     <section style={styles.card}>
-      <h3>{title}</h3>
+      <h3 style={styles.cardTitle}>{title}</h3>
       {children}
     </section>
   );
@@ -343,7 +531,10 @@ function Card({ title, children }) {
 function Step({ children, done, active }) {
   return (
     <p style={styles.step}>
-      <span>{done ? "✓" : active ? "◌" : "○"}</span> {children}
+      <span style={done ? styles.stepDone : active ? styles.stepActive : styles.stepIdle}>
+        {done ? "✓" : active ? "◌" : "○"}
+      </span>{" "}
+      {children}
     </p>
   );
 }
@@ -352,15 +543,17 @@ function Menu() {
   return <button style={styles.menu}>☰</button>;
 }
 
-function Wave() {
+function Wave({ levels }) {
   return (
     <div style={styles.wave}>
-      {Array.from({ length: 26 }).map((_, i) => (
+      {levels.map((level, index) => (
         <span
-          key={i}
+          key={index}
           style={{
             ...styles.bar,
-            height: `${18 + (i % 7) * 8}px`,
+            height: `${18 + level * 88}px`,
+            opacity: 0.45 + level * 0.55,
+            transform: `scaleY(${0.75 + level * 0.55})`,
           }}
         />
       ))}
@@ -368,22 +561,25 @@ function Wave() {
   );
 }
 
-function BottomNav({ screen, setScreen }) {
+function BottomNav({ screen, navigate }) {
   return (
     <nav style={styles.nav}>
       <button
         style={screen === "home" ? styles.navActiveButton : styles.navButton}
-        onClick={() => setScreen("home")}
+        onClick={() => navigate("home", "back")}
       >
         Home
       </button>
       <button
         style={screen === "history" ? styles.navActiveButton : styles.navButton}
-        onClick={() => setScreen("history")}
+        onClick={() => navigate("history", "forward")}
       >
         History
       </button>
-      <button style={styles.navButton} type="button">
+      <button
+        style={screen === "settings" ? styles.navActiveButton : styles.navButton}
+        onClick={() => navigate("settings", "forward")}
+      >
         Settings
       </button>
     </nav>
@@ -396,10 +592,14 @@ function formatTime(sec) {
   return `${m}:${s}`;
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "#f5f6fa",
+    background: "linear-gradient(180deg, #f6f7fb 0%, #eceff5 100%)",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     color: "#111",
     display: "flex",
@@ -422,6 +622,14 @@ const styles = {
   contentArea: {
     height: "100%",
     overflow: "hidden",
+  },
+  screenTransitionForward: {
+    height: "100%",
+    animation: "slideInForward 260ms ease both",
+  },
+  screenTransitionBack: {
+    height: "100%",
+    animation: "slideInBack 260ms ease both",
   },
   center: {
     height: "100%",
@@ -448,7 +656,7 @@ const styles = {
   },
   title: {
     fontSize: 34,
-    marginTop: 118,
+    marginTop: 102,
     marginBottom: 12,
     textAlign: "center",
     lineHeight: 1.12,
@@ -461,11 +669,29 @@ const styles = {
     lineHeight: 1.5,
     maxWidth: 300,
   },
+  titleInput: {
+    width: "100%",
+    maxWidth: 320,
+    marginTop: 28,
+    border: "1px solid rgba(15, 23, 42, 0.12)",
+    borderRadius: 14,
+    padding: "14px 16px",
+    fontSize: 15,
+    outline: "none",
+    background: "white",
+    boxShadow: "0 8px 20px rgba(15, 23, 42, 0.05)",
+  },
   heading: {
     fontSize: 28,
     textAlign: "center",
     marginTop: 64,
     marginBottom: 34,
+    lineHeight: 1.2,
+    letterSpacing: "-0.03em",
+  },
+  historyHeading: {
+    fontSize: 28,
+    margin: "24px 0 18px",
     lineHeight: 1.2,
     letterSpacing: "-0.03em",
   },
@@ -481,14 +707,39 @@ const styles = {
     boxShadow: "0 10px 22px rgba(15, 23, 42, 0.18)",
   },
   blackButtonWide: {
-    width: "100%",
-    marginTop: 8,
+    flex: 1,
     background: "linear-gradient(180deg, #2b2f37, #14161b)",
     color: "white",
     border: "none",
     borderRadius: 14,
-    padding: "16px 22px",
-    fontSize: 16,
+    padding: "16px 18px",
+    fontSize: 15,
+    fontWeight: 700,
+  },
+  secondaryActionButton: {
+    flex: 1,
+    background: "white",
+    color: "#111827",
+    border: "1px solid rgba(15, 23, 42, 0.12)",
+    borderRadius: 14,
+    padding: "16px 18px",
+    fontSize: 15,
+    fontWeight: 700,
+  },
+  textButton: {
+    border: "none",
+    background: "transparent",
+    marginTop: 16,
+    color: "#555",
+    fontSize: 15,
+    fontWeight: 700,
+  },
+  cancelButton: {
+    border: "none",
+    background: "transparent",
+    color: "#666",
+    alignSelf: "flex-start",
+    fontSize: 15,
     fontWeight: 700,
   },
   stopButton: {
@@ -518,7 +769,8 @@ const styles = {
   bar: {
     width: 5,
     borderRadius: 99,
-    background: "#b7b7b7",
+    background: "linear-gradient(180deg, #111827, #9ca3af)",
+    transition: "height 90ms ease, transform 90ms ease, opacity 90ms ease",
   },
   loader: {
     width: 72,
@@ -538,6 +790,17 @@ const styles = {
   step: {
     margin: "10px 0",
   },
+  stepDone: {
+    color: "#16a34a",
+    fontWeight: 800,
+  },
+  stepActive: {
+    color: "#111827",
+    fontWeight: 800,
+  },
+  stepIdle: {
+    color: "#9ca3af",
+  },
   card: {
     background: "white",
     borderRadius: 18,
@@ -545,6 +808,10 @@ const styles = {
     marginBottom: 14,
     boxShadow: "0 8px 18px rgba(0,0,0,.06)",
     border: "1px solid rgba(15, 23, 42, 0.06)",
+  },
+  cardTitle: {
+    margin: "0 0 12px",
+    fontSize: 16,
   },
   text: {
     whiteSpace: "pre-wrap",
@@ -556,6 +823,7 @@ const styles = {
   muted: {
     color: "#777",
     fontSize: 16,
+    lineHeight: 1.5,
   },
   error: {
     background: "#fee2e2",
@@ -565,6 +833,7 @@ const styles = {
     marginTop: 16,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
+    lineHeight: 1.5,
   },
   check: {
     marginTop: 150,
@@ -577,6 +846,21 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     fontSize: 58,
+    animation: "popIn 320ms ease both",
+  },
+  historyHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  refreshButton: {
+    border: "none",
+    background: "white",
+    borderRadius: 999,
+    padding: "8px 12px",
+    fontSize: 13,
+    fontWeight: 700,
+    boxShadow: "0 6px 16px rgba(15, 23, 42, 0.08)",
   },
   historyItem: {
     width: "100%",
@@ -619,6 +903,11 @@ const styles = {
     width: 32,
     height: 1,
   },
+  summaryActions: {
+    display: "flex",
+    gap: 10,
+    marginTop: 6,
+  },
   nav: {
     position: "absolute",
     left: 18,
@@ -658,8 +947,24 @@ style.innerHTML = `
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+@keyframes slideInForward {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInBack {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: scale(1); }
+}
 button {
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+button:active {
+  transform: scale(0.98);
 }
 `;
 document.head.appendChild(style);
