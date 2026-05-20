@@ -331,7 +331,6 @@ export default function App() {
 function Home({ title, setTitle, onStart, error }) {
   return (
     <main style={styles.center}>
-      <Menu />
       <h1 style={styles.title}>AI Meeting Assistant</h1>
       <p style={styles.subtitle}>
         Record, transcribe, and summarize your meetings with AI.
@@ -369,7 +368,6 @@ function Recording({ seconds, levels, onStop, onCancel }) {
 function Processing({ step }) {
   return (
     <main style={styles.center}>
-      <Menu />
       <h2 style={styles.heading}>Processing your meeting...</h2>
       <div style={styles.loader} />
       <div style={styles.steps}>
@@ -391,6 +389,7 @@ function Processing({ step }) {
 }
 
 function Summary({ result, audioUrl, error, onSave, onBack, onRecordAgain }) {
+  const audioRef = useRef(null);
   const transcript =
     result?.timeline_transcript ||
     result?.timelineTranscript ||
@@ -398,12 +397,28 @@ function Summary({ result, audioUrl, error, onSave, onBack, onRecordAgain }) {
     result?.text ||
     "";
 
+  const segments = Array.isArray(result?.segments) ? result.segments : [];
+
   const summaryValue =
     result?.summary || result?.ai_summary || result?.meeting_summary || "";
   const summary =
     typeof summaryValue === "string"
       ? summaryValue
       : summaryValue?.summary || summaryValue?.overview || "";
+
+  const parsedSummary = parseSummary(summary);
+  const hasStructuredSummary =
+    parsedSummary.quickSummary ||
+    parsedSummary.keyPoints.length > 0 ||
+    parsedSummary.actionItems.length > 0 ||
+    parsedSummary.importantInfo.length > 0;
+
+  function jumpToSegment(startTime) {
+    const seconds = timeToSeconds(startTime);
+    if (!audioRef.current || Number.isNaN(seconds)) return;
+    audioRef.current.currentTime = seconds;
+    audioRef.current.play().catch(() => {});
+  }
 
   return (
     <main style={styles.scroll}>
@@ -419,20 +434,86 @@ function Summary({ result, audioUrl, error, onSave, onBack, onRecordAgain }) {
 
       {audioUrl && (
         <Card title="Audio Playback">
-          <audio controls src={audioUrl} style={{ width: "100%" }} />
+          <audio ref={audioRef} controls src={audioUrl} style={{ width: "100%" }} />
         </Card>
       )}
 
-      <Card title="Summary">
-        {summary ? (
-          <pre style={styles.text}>{summary}</pre>
-        ) : (
-          <p style={styles.muted}>尚未產生摘要。</p>
-        )}
-      </Card>
+      {hasStructuredSummary ? (
+        <>
+          <Card title="Quick Summary">
+            <p style={styles.highlightText}>
+              {parsedSummary.quickSummary || parsedSummary.oneSentence || "No quick summary available."}
+            </p>
+          </Card>
+
+          {parsedSummary.keyPoints.length > 0 && (
+            <Card title="Key Points">
+              <ul style={styles.cleanList}>
+                {parsedSummary.keyPoints.map((item, index) => (
+                  <li key={`key-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {parsedSummary.actionItems.length > 0 && (
+            <Card title="Action Items">
+              <div style={styles.actionList}>
+                {parsedSummary.actionItems.map((item, index) => (
+                  <label key={`action-${index}`} style={styles.actionItem}>
+                    <input type="checkbox" />
+                    <span>{item}</span>
+                  </label>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {parsedSummary.importantInfo.length > 0 && (
+            <Card title="Important Details">
+              <ul style={styles.cleanList}>
+                {parsedSummary.importantInfo.map((item, index) => (
+                  <li key={`info-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {summary && (
+            <details style={styles.detailsBox}>
+              <summary style={styles.detailsSummary}>Full AI Analysis</summary>
+              <pre style={styles.text}>{summary}</pre>
+            </details>
+          )}
+        </>
+      ) : (
+        <Card title="Summary">
+          {summary ? (
+            <pre style={styles.text}>{summary}</pre>
+          ) : (
+            <p style={styles.muted}>尚未產生摘要。</p>
+          )}
+        </Card>
+      )}
 
       <Card title="Transcript">
-        {transcript ? (
+        {segments.length > 0 ? (
+          <div style={styles.segmentList}>
+            {segments.map((segment, index) => (
+              <button
+                key={`${segment.start}-${index}`}
+                style={styles.segmentItem}
+                onClick={() => jumpToSegment(segment.start)}
+              >
+                <span style={styles.segmentTime}>{segment.start}</span>
+                <span style={styles.segmentBody}>
+                  <strong>{segment.speaker || `Speaker ${index + 1}`}</strong>
+                  <span>{segment.text}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : transcript ? (
           <pre style={styles.text}>{transcript}</pre>
         ) : (
           <p style={styles.muted}>尚未產生逐字稿。</p>
@@ -449,6 +530,83 @@ function Summary({ result, audioUrl, error, onSave, onBack, onRecordAgain }) {
       </div>
     </main>
   );
+}
+function parseSummary(summaryText) {
+  if (!summaryText || typeof summaryText !== "string") {
+    return {
+      quickSummary: "",
+      keyPoints: [],
+      actionItems: [],
+      importantInfo: [],
+      oneSentence: "",
+    };
+  }
+
+  const sections = {};
+  const lines = summaryText.split("\n");
+  let currentSection = "overview";
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const headingMatch = line.match(/^#{1,3}\s*(.+)$/);
+    if (headingMatch) {
+      currentSection = normalizeSectionTitle(headingMatch[1]);
+      sections[currentSection] = sections[currentSection] || [];
+      continue;
+    }
+
+    sections[currentSection] = sections[currentSection] || [];
+    sections[currentSection].push(line.replace(/^[-•]\s*/, ""));
+  }
+
+  const summaryLines = [
+    ...(sections["內容摘要"] || []),
+    ...(sections["一般摘要"] || []),
+    ...(sections["overview"] || []),
+  ].filter(Boolean);
+
+  const importantInfo = [
+    ...(sections["重要資訊"] || []),
+    ...(sections["關鍵句或重要細節"] || []),
+  ].filter(Boolean);
+
+  const actionItems = [
+    ...(sections["後續可做的事"] || []),
+    ...(sections["待辦事項"] || []),
+    ...(sections["action items"] || []),
+  ].filter(Boolean);
+
+  const oneSentence = [
+    ...(sections["一句話結論"] || []),
+    ...(sections["結論"] || []),
+  ].filter(Boolean)[0] || "";
+
+  return {
+    quickSummary: summaryLines[0] || oneSentence || "",
+    keyPoints: summaryLines.slice(0, 5),
+    actionItems,
+    importantInfo,
+    oneSentence,
+  };
+}
+
+function normalizeSectionTitle(title) {
+  return title
+    .replace(/[:：]/g, "")
+    .replace(/^\d+\.\s*/, "")
+    .trim()
+    .toLowerCase();
+}
+
+function timeToSeconds(timeString) {
+  if (!timeString || typeof timeString !== "string") return Number.NaN;
+  const parts = timeString.split(":").map(Number);
+  if (parts.some(Number.isNaN)) return Number.NaN;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return Number.NaN;
 }
 
 function Saved({ onHistory, onHome }) {
@@ -471,7 +629,6 @@ function History({ history, isLoading, onOpen, onRefresh }) {
   return (
     <main style={styles.scroll}>
       <div style={styles.historyHeader}>
-        <Menu />
         <button style={styles.refreshButton} onClick={onRefresh}>
           Refresh
         </button>
@@ -507,13 +664,32 @@ function History({ history, isLoading, onOpen, onRefresh }) {
 function Settings() {
   return (
     <main style={styles.scroll}>
-      <Menu />
       <h2 style={styles.historyHeading}>Settings</h2>
-      <Card title="Backend">
-        <p style={styles.text}>{API_BASE_URL}</p>
+
+      <Card title="AI Meeting Assistant">
+        <p style={styles.text}>MVP v1.0</p>
+        <p style={styles.muted}>
+          Record, transcribe, and summarize meetings in one place.
+        </p>
       </Card>
-      <Card title="Version">
-        <p style={styles.text}>MVP demo build</p>
+
+      <Card title="AI Features">
+        <p style={styles.text}>
+          ✓ Audio transcription{"\n"}
+          ✓ Timeline transcript{"\n"}
+          ✓ AI meeting summary{"\n"}
+          ✓ Speaker segmentation
+        </p>
+      </Card>
+
+      <Card title="Privacy">
+        <p style={styles.text}>
+          Audio is uploaded only for transcription and meeting analysis.
+        </p>
+      </Card>
+
+      <Card title="Built With">
+        <p style={styles.text}>OpenAI, FastAPI, React, PostgreSQL</p>
       </Card>
     </main>
   );
@@ -539,9 +715,6 @@ function Step({ children, done, active }) {
   );
 }
 
-function Menu() {
-  return <button style={styles.menu}>☰</button>;
-}
 
 function Wave({ levels }) {
   return (
@@ -643,16 +816,6 @@ const styles = {
     height: "100%",
     padding: "20px 18px 104px",
     overflowY: "auto",
-  },
-  menu: {
-    border: "none",
-    background: "transparent",
-    color: "#111",
-    borderRadius: 8,
-    padding: "4px 0",
-    alignSelf: "flex-start",
-    fontSize: 25,
-    lineHeight: 1,
   },
   title: {
     fontSize: 34,
@@ -813,6 +976,74 @@ const styles = {
     margin: "0 0 12px",
     fontSize: 16,
   },
+  highlightText: {
+    margin: 0,
+    fontSize: 15,
+    lineHeight: 1.7,
+    color: "#111827",
+    fontWeight: 700,
+  },
+  cleanList: {
+    margin: 0,
+    paddingLeft: 20,
+    display: "grid",
+    gap: 8,
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+  actionList: {
+    display: "grid",
+    gap: 10,
+  },
+  actionItem: {
+    display: "flex",
+    gap: 10,
+    alignItems: "flex-start",
+    fontSize: 14,
+    lineHeight: 1.5,
+  },
+  detailsBox: {
+    background: "white",
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 14,
+    boxShadow: "0 8px 18px rgba(0,0,0,.06)",
+    border: "1px solid rgba(15, 23, 42, 0.06)",
+  },
+  detailsSummary: {
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  segmentList: {
+    display: "grid",
+    gap: 10,
+  },
+  segmentItem: {
+    width: "100%",
+    border: "1px solid rgba(15, 23, 42, 0.08)",
+    background: "#f8fafc",
+    borderRadius: 14,
+    padding: 12,
+    display: "grid",
+    gridTemplateColumns: "54px 1fr",
+    gap: 10,
+    textAlign: "left",
+  },
+  segmentTime: {
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: 800,
+    paddingTop: 2,
+  },
+  segmentBody: {
+    display: "grid",
+    gap: 4,
+    fontSize: 14,
+    lineHeight: 1.55,
+    color: "#111827",
+  },
   text: {
     whiteSpace: "pre-wrap",
     fontFamily: "inherit",
@@ -965,6 +1196,12 @@ button {
 }
 button:active {
   transform: scale(0.98);
+}
+summary::marker {
+  color: #111827;
+}
+input[type="checkbox"] {
+  accent-color: #111827;
 }
 `;
 document.head.appendChild(style);
