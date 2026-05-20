@@ -24,6 +24,7 @@ export default function App() {
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const streamRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     loadHistory();
@@ -31,6 +32,7 @@ export default function App() {
       stopAudioVisualizer();
       clearInterval(timerRef.current);
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      abortControllerRef.current?.abort();
     };
   }, []);
 
@@ -145,6 +147,14 @@ export default function App() {
     navigate("home", "back");
   }
 
+  function cancelProcessing() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setProcessingStep("idle");
+    setError("AI processing was cancelled.");
+    navigate("home", "back");
+  }
+
   async function uploadAudioFile(file) {
     if (!file) return;
 
@@ -164,6 +174,7 @@ export default function App() {
 
   async function processAudio(blob, mimeType, titleOverride = "") {
     try {
+      abortControllerRef.current = new AbortController();
       const safeMimeType = mimeType || blob.type || "audio/mp4";
       const ext = safeMimeType.includes("webm") ? "webm" : "m4a";
       const fileName = `meeting-${Date.now()}.${ext}`;
@@ -181,6 +192,7 @@ export default function App() {
       const res = await fetch(`${API_BASE_URL}/meetings/transcribe-summary`, {
         method: "POST",
         body: formData,
+        signal: abortControllerRef.current.signal,
       });
 
       if (!res.ok) {
@@ -190,6 +202,7 @@ export default function App() {
 
       setProcessingStep("summarizing");
       const data = await res.json();
+      abortControllerRef.current = null;
       console.log("AI result from backend:", data);
 
       setResult(data);
@@ -197,6 +210,13 @@ export default function App() {
       navigate("summary", "forward");
       loadHistory();
     } catch (err) {
+      abortControllerRef.current = null;
+
+      if (err.name === "AbortError") {
+        setError("AI processing was cancelled.");
+        return;
+      }
+
       console.error(err);
       const message = err.message || "Unknown error";
       const friendlyMessage =
@@ -311,7 +331,9 @@ export default function App() {
                 onCancel={cancelRecording}
               />
             )}
-            {screen === "processing" && <Processing step={processingStep} />}
+            {screen === "processing" && (
+              <Processing step={processingStep} onCancel={cancelProcessing} />
+            )}
             {screen === "summary" && (
               <Summary
                 result={result}
@@ -340,7 +362,11 @@ export default function App() {
           </div>
         </div>
 
-        <BottomNav screen={screen} navigate={navigate} />
+        <BottomNav
+          screen={screen}
+          navigate={navigate}
+          disabled={screen === "processing"}
+        />
       </div>
     </div>
   );
@@ -400,7 +426,7 @@ function Recording({ seconds, levels, onStop, onCancel }) {
   );
 }
 
-function Processing({ step }) {
+function Processing({ step, onCancel }) {
   return (
     <main style={styles.center}>
       <h2 style={styles.heading}>Processing your meeting...</h2>
@@ -419,6 +445,9 @@ function Processing({ step }) {
           Generating summary
         </Step>
       </div>
+      <button style={styles.cancelProcessingButton} onClick={onCancel}>
+        Cancel Processing
+      </button>
     </main>
   );
 }
@@ -769,23 +798,44 @@ function Wave({ levels }) {
   );
 }
 
-function BottomNav({ screen, navigate }) {
+function BottomNav({ screen, navigate, disabled = false }) {
   return (
     <nav style={styles.nav}>
       <button
-        style={screen === "home" ? styles.navActiveButton : styles.navButton}
+        style={
+          disabled
+            ? styles.navDisabledButton
+            : screen === "home"
+            ? styles.navActiveButton
+            : styles.navButton
+        }
+        disabled={disabled}
         onClick={() => navigate("home", "back")}
       >
         Home
       </button>
       <button
-        style={screen === "history" ? styles.navActiveButton : styles.navButton}
+        style={
+          disabled
+            ? styles.navDisabledButton
+            : screen === "history"
+            ? styles.navActiveButton
+            : styles.navButton
+        }
+        disabled={disabled}
         onClick={() => navigate("history", "forward")}
       >
         History
       </button>
       <button
-        style={screen === "settings" ? styles.navActiveButton : styles.navButton}
+        style={
+          disabled
+            ? styles.navDisabledButton
+            : screen === "settings"
+            ? styles.navActiveButton
+            : styles.navButton
+        }
+        disabled={disabled}
         onClick={() => navigate("settings", "forward")}
       >
         Settings
@@ -903,6 +953,17 @@ const styles = {
     fontSize: 16,
     fontWeight: 700,
     boxShadow: "0 10px 22px rgba(15, 23, 42, 0.18)",
+  },
+  cancelProcessingButton: {
+    marginTop: 34,
+    background: "white",
+    color: "#991b1b",
+    border: "1px solid rgba(153, 27, 27, 0.18)",
+    borderRadius: 14,
+    padding: "13px 20px",
+    fontSize: 15,
+    fontWeight: 800,
+    boxShadow: "0 8px 20px rgba(15, 23, 42, 0.06)",
   },
   uploadButton: {
     marginTop: 14,
@@ -1223,6 +1284,16 @@ const styles = {
     padding: "10px 6px",
     fontSize: 13,
     fontWeight: 800,
+  },
+  navDisabledButton: {
+    border: "none",
+    background: "#f3f4f6",
+    color: "#c4c7cf",
+    borderRadius: 999,
+    padding: "10px 6px",
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: "not-allowed",
   },
 };
 
