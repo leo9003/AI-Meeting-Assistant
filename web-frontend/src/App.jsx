@@ -145,13 +145,30 @@ export default function App() {
     navigate("home", "back");
   }
 
-  async function processAudio(blob, mimeType) {
+  async function uploadAudioFile(file) {
+    if (!file) return;
+
+    setError("");
+    setResult(null);
+    setAudioUrl(URL.createObjectURL(file));
+    setRecordingSeconds(0);
+    setProcessingStep("uploading");
+    navigate("processing", "forward");
+
+    const titleFromFile = file.name
+      ? file.name.replace(/\.[^/.]+$/, "")
+      : "Uploaded Meeting";
+
+    await processAudio(file, file.type || "audio/mp4", titleFromFile);
+  }
+
+  async function processAudio(blob, mimeType, titleOverride = "") {
     try {
       const safeMimeType = mimeType || blob.type || "audio/mp4";
       const ext = safeMimeType.includes("webm") ? "webm" : "m4a";
       const fileName = `meeting-${Date.now()}.${ext}`;
       const meetingTitle =
-        recordingTitle.trim() || `Meeting ${new Date().toLocaleString()}`;
+        titleOverride || recordingTitle.trim() || `Meeting ${new Date().toLocaleString()}`;
 
       setProcessingStep("uploading");
       await wait(250);
@@ -282,6 +299,7 @@ export default function App() {
                 title={recordingTitle}
                 setTitle={setRecordingTitle}
                 onStart={startRecording}
+                onUpload={uploadAudioFile}
                 error={error}
               />
             )}
@@ -328,7 +346,7 @@ export default function App() {
   );
 }
 
-function Home({ title, setTitle, onStart, error }) {
+function Home({ title, setTitle, onStart, onUpload, error }) {
   return (
     <main style={styles.center}>
       <h1 style={styles.title}>AI Meeting Assistant</h1>
@@ -345,6 +363,23 @@ function Home({ title, setTitle, onStart, error }) {
       <button style={styles.blackButton} onClick={onStart}>
         🎙 Start Recording
       </button>
+
+      <label style={styles.uploadButton}>
+        Upload .m4a Audio File
+        <input
+          type="file"
+          accept=".m4a,audio/mp4"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            onUpload(file);
+          }}
+        />
+      </label>
+      <p style={styles.uploadHint}>
+        Only .m4a audio files are supported.
+      </p>
     </main>
   );
 }
@@ -869,6 +904,17 @@ const styles = {
     fontWeight: 700,
     boxShadow: "0 10px 22px rgba(15, 23, 42, 0.18)",
   },
+  uploadButton: {
+    marginTop: 14,
+    background: "white",
+    color: "#111827",
+    border: "1px solid rgba(15, 23, 42, 0.12)",
+    borderRadius: 14,
+    padding: "14px 22px",
+    fontSize: 15,
+    fontWeight: 700,
+    boxShadow: "0 8px 20px rgba(15, 23, 42, 0.06)",
+  },
   blackButtonWide: {
     flex: 1,
     background: "linear-gradient(180deg, #2b2f37, #14161b)",
@@ -878,6 +924,13 @@ const styles = {
     padding: "16px 18px",
     fontSize: 15,
     fontWeight: 700,
+  },
+  uploadHint: {
+    marginTop: 10,
+    fontSize: 13,
+    color: "#6b7280",
+    textAlign: "center",
+    lineHeight: 1.4,
   },
   secondaryActionButton: {
     flex: 1,
