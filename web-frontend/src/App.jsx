@@ -25,6 +25,7 @@ export default function App() {
   const animationFrameRef = useRef(null);
   const streamRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const shouldDiscardRecordingRef = useRef(false);
 
   useEffect(() => {
     loadHistory();
@@ -71,6 +72,7 @@ export default function App() {
       setAudioUrl("");
       setAudioLevels(Array(26).fill(0.25));
       chunksRef.current = [];
+      shouldDiscardRecordingRef.current = false;
       secondsRef.current = 0;
       setRecordingSeconds(0);
 
@@ -101,20 +103,25 @@ export default function App() {
         stopAudioVisualizer();
         stream.getTracks().forEach((track) => track.stop());
 
+        if (shouldDiscardRecordingRef.current) {
+            shouldDiscardRecordingRef.current = false;
+            chunksRef.current = [];
+            return;
+        }
+        
         const blob = new Blob(chunksRef.current, {
           type: mimeType || "audio/mp4",
         });
-
+        
         const localUrl = URL.createObjectURL(blob);
         setAudioUrl(localUrl);
-
+        
         await processAudio(blob, mimeType);
-      };
-
-      recorder.start();
-      navigate("recording", "forward");
-
-      timerRef.current = setInterval(() => {
+        };
+        
+        recorder.start();
+        navigate("recording", "forward");
+        timerRef.current = setInterval(() => {
         secondsRef.current += 1;
         setRecordingSeconds(secondsRef.current);
       }, 1000);
@@ -135,17 +142,20 @@ export default function App() {
   }
 
   function cancelRecording() {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
-    }
+  shouldDiscardRecordingRef.current = true;
 
-    clearInterval(timerRef.current);
-    stopAudioVisualizer();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    setRecordingSeconds(0);
-    setAudioLevels(Array(26).fill(0.25));
-    navigate("home", "back");
+  if (recorderRef.current && recorderRef.current.state !== "inactive") {
+    recorderRef.current.stop();
   }
+
+  clearInterval(timerRef.current);
+  stopAudioVisualizer();
+  streamRef.current?.getTracks().forEach((track) => track.stop());
+  chunksRef.current = [];
+  setRecordingSeconds(0);
+  setAudioLevels(Array(26).fill(0.25));
+  navigate("home", "back");
+}
 
   function cancelProcessing() {
     abortControllerRef.current?.abort();
@@ -365,7 +375,7 @@ export default function App() {
         <BottomNav
           screen={screen}
           navigate={navigate}
-          disabled={screen === "processing"}
+          disabled={screen === "processing" || screen === "recording"}
         />
       </div>
     </div>
