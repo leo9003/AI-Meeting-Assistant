@@ -12,7 +12,7 @@ The application allows users to **record or upload meeting audio**, automaticall
 
 Try the live demo here:
 
-🔗 https://ai-meeting-assistant-dtc4v8p9r-leo095215639070-9240s-projects.vercel.app/
+🔗 https://ai-meeting-assistant-alpha.vercel.app/
 
 > Demo supports meeting recording, `.m4a` upload, transcription, AI summarization, and meeting history.
 
