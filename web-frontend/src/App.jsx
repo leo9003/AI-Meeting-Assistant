@@ -4,7 +4,15 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 export default function App() {
-  const [screen, setScreen] = useState("home");
+  const [screen, setScreen] = useState(() => {
+  const savedScreen = window.localStorage.getItem(
+    "aiMeetingCurrentScreen"
+  );
+
+  return ["home", "history", "settings"].includes(savedScreen)
+    ? savedScreen
+    : "home";
+  });
   const [screenDirection, setScreenDirection] = useState("forward");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [processingStep, setProcessingStep] = useState("idle");
@@ -29,17 +37,31 @@ export default function App() {
 
   useEffect(() => {
     loadHistory();
+    
     return () => {
-      stopAudioVisualizer();
-      clearInterval(timerRef.current);
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      abortControllerRef.current?.abort();
+    stopAudioVisualizer();
+    clearInterval(timerRef.current);
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    abortControllerRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+      if (["home", "history", "settings"].includes(screen)) {
+        window.localStorage.setItem(
+          "aiMeetingCurrentScreen",
+          screen
+      );
+    }
+  }, [screen]);
 
   function navigate(nextScreen, direction = "forward") {
     setScreenDirection(direction);
     setScreen(nextScreen);
+
+    if (nextScreen === "history") {
+      loadHistory();
+    }
   }
 
   async function loadHistory() {
@@ -49,17 +71,35 @@ export default function App() {
       if (!res.ok) return;
       const data = await res.json();
 
+      let nextHistory = [];
+
       if (Array.isArray(data)) {
-        setHistory(data);
+        nextHistory = data;
       } else if (Array.isArray(data.meetings)) {
-        setHistory(data.meetings);
+        nextHistory = data.meetings;
       } else if (Array.isArray(data.items)) {
-        setHistory(data.items);
-      } else {
-        setHistory([]);
+        nextHistory = data.items;
       }
+
+      setHistory(nextHistory);
+
+      window.localStorage.setItem(
+        "aiMeetingHistoryCache",
+        JSON.stringify(nextHistory)
+      );
     } catch {
-      // History is optional. Keep app usable even if backend list endpoint is unavailable.
+      const cachedHistory = window.localStorage.getItem(
+        "aiMeetingHistoryCache"
+      );
+
+      if (cachedHistory) {
+        try {
+          setHistory(JSON.parse(cachedHistory));
+        } catch {
+          setHistory([]);
+        }
+      }
+// History is optional. Keep app usable even if backend list endpoint is unavailable.
     } finally {
       setIsLoadingHistory(false);
     }
@@ -703,11 +743,12 @@ function History({ history, isLoading, onOpen, onRefresh }) {
   return (
     <main style={styles.scroll}>
       <div style={styles.historyHeader}>
+        <h2 style={styles.historyHeading}>History</h2>
+
         <button style={styles.refreshButton} onClick={onRefresh}>
           Refresh
         </button>
       </div>
-      <h2 style={styles.historyHeading}>History</h2>
 
       {isLoading && <p style={styles.muted}>Loading meetings...</p>}
       {!isLoading && history.length === 0 && (
@@ -914,7 +955,7 @@ const styles = {
   },
   title: {
     fontSize: 34,
-    marginTop: 102,
+    marginTop: 128,
     marginBottom: 12,
     textAlign: "center",
     lineHeight: 1.12,
