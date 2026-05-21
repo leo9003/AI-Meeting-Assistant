@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,6 @@ from app.schemas.meeting_schema import (
 from app.services.meeting_storage_service import (
     generate_meeting_id,
     get_current_timestamp,
-    load_meeting_result,
     save_meeting_result,
 )
 from app.services.summary_service import generate_meeting_summary
@@ -350,5 +349,22 @@ def transcribe_meeting_audio(
 
 
 @router.get("/{meeting_id}")
-def get_meeting_result(meeting_id: str):
-    return load_meeting_result(meeting_id)
+def get_meeting_result(meeting_id: str, db: Session = Depends(get_db)):
+    meetings = list_meetings(db)
+    meeting = next((item for item in meetings if str(item.id) == meeting_id), None)
+
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    return {
+        "meeting_id": str(meeting.id),
+        "meeting_title": meeting.meeting_title,
+        "status": meeting.status,
+        "created_at": meeting.created_at,
+        "speaker_count": meeting.speaker_count,
+        "transcript": meeting.transcript,
+        "timeline_transcript": meeting.timeline_transcript,
+        "summary": meeting.summary,
+        "content_type": meeting.content_type,
+        "has_summary": bool(meeting.summary),
+    }
