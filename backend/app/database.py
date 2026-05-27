@@ -26,6 +26,7 @@ SessionLocal = sessionmaker(
 
 Base = declarative_base()
 
+from app.models.meeting_model import Meeting
 
 def get_db():
     """Provide database session dependency."""
