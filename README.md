@@ -24,6 +24,8 @@ Try the live demo here:
 
 ![UI Flow](docs/image/finalUI.jpg)
 
+![Backend Tests](https://github.com/leo9003/AI-Meeting-Assistant/actions/workflows/backend-test.yml/badge.svg)
+
 ### Core Features
 
 - 🎤 **Voice Recording**
