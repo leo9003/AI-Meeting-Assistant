@@ -47,6 +47,16 @@ jobs:
           --cov=app \
           --cov-report=term-missing
 
+  deploy-backend:
+    needs: backend-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Trigger Render Deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
   deploy-frontend:
     needs: backend-test
     runs-on: ubuntu-latest
