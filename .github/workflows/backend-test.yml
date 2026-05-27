@@ -13,7 +13,6 @@ on:
 
   workflow_dispatch:
 
-
 jobs:
   backend-test:
     runs-on: ubuntu-latest
@@ -47,3 +46,13 @@ jobs:
           pytest tests/test_api.py \
           --cov=app \
           --cov-report=term-missing
+
+  deploy-frontend:
+    needs: backend-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Trigger Vercel Deploy
+        run: |
+          curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK_URL }}"
