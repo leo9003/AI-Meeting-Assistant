@@ -43,6 +43,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
         run: |
+          python -c "from app.database import create_database_tables; create_database_tables()"
           pytest tests/test_api.py \
           --cov=app \
           --cov-report=term-missing
