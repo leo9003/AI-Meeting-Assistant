@@ -1,4 +1,4 @@
-# 🎙️ AI Meeting Assistant
+# AI Meeting Assistant 🚀
 
 An AI-powered meeting assistant for **audio recording, speech-to-text transcription, speaker diarization, and intelligent meeting summarization**.
 
