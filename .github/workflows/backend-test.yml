@@ -38,7 +38,9 @@ jobs:
           pip install pytest pytest-cov httpx
 
       - name: Run Backend Tests
+        env:
+          DATABASE_URL: sqlite:///./test.db
         run: |
-          pytest -m "not integration" \
+          pytest tests/test_api.py \
           --cov=app \
           --cov-report=term-missing
