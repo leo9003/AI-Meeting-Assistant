@@ -1,0 +1,11 @@
+.DS_Store
+.env
+backend/.env
+backend/meetings/
+recordingtest/
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+.idea/
